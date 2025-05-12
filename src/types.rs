@@ -1,44 +1,19 @@
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-use std::io::{Cursor, Read};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-#[derive(Error, Debug)]
-pub enum DbError {
-    #[error("Invalid data: {0}")]
-    InvalidData(String),
-    #[error("Type mismatch")]
-    TypeMismatch,
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Eq, Hash)]
-pub enum Value {
-    Int32(i32),
-    Float32(OrderedFloat<f32>),
-    String(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DataType {
     Int32,
     Float32,
     String,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
-pub enum CompressionType {
-    None,
-    Rle, //Run-Length Encoding
-    Dictionary,
-    // Delta,
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord ,Hash)]
+pub enum Value {
+    Int32(i32),
+    Float32(OrderedFloat<f32>),
+    String(String),
 }
-
-pub type TransactionId = u64;
 
 impl Value {
     pub fn data_type(&self) -> DataType {
@@ -48,32 +23,104 @@ impl Value {
             Value::String(_) => DataType::String,
         }
     }
-    pub fn serialize(&self) -> Vec<u8>
-    {
-        let mut buf = Vec::new();
+
+    pub fn serialize(&self) -> Vec<u8> {
         match self {
-            Value::Int32(v) => buf.write_i32::<LittleEndian>(*v).unwrap(),
-            Value::Float32(v) => buf.write_f32::<LittleEndian>(**v).unwrap(),
-            Value::String(v) => {
-                let bytes = v.as_bytes();
-                buf.write_u32::<LittleEndian>(bytes.len() as u32).unwrap();
-                buf.extend_from_slice(bytes);
+            Value::Int32(i) => i.to_le_bytes().to_vec(),
+            Value::Float32(f) => f.0.to_le_bytes().to_vec(),
+            Value::String(s) => {
+                let bytes = s.as_bytes();
+                let len = bytes.len() as u32;
+                let mut result = len.to_le_bytes().to_vec();
+                result.extend(bytes);
+                result
             }
         }
-        buf
     }
-    pub fn deserialize(data_type:&DataType,bytes:&[u8])-> Result<Value , DbError>
-    {
-        let mut cursor =Cursor::new(bytes);
+
+    pub fn deserialize(data_type: &DataType, bytes: &[u8]) -> Result<Value, DbError> {
         match data_type {
-            DataType::Int32 => Ok(Value::Int32(cursor.read_i32::<LittleEndian>()?)),
-            DataType::Float32 => Ok(Value::Float32(ordered_float::OrderedFloat(cursor.read_f32::<LittleEndian>()?))),
+            DataType::Int32 => {
+                if bytes.len() >= 4 {
+                    let mut array = [0u8; 4];
+                    array.copy_from_slice(&bytes[..4]);
+                    Ok(Value::Int32(i32::from_le_bytes(array)))
+                } else {
+                    Err(DbError::SerializationError("Insufficient bytes for Int32".to_string()))
+                }
+            }
+            DataType::Float32 => {
+                if bytes.len() >= 4 {
+                    let mut array = [0u8; 4];
+                    array.copy_from_slice(&bytes[..4]);
+                    Ok(Value::Float32(OrderedFloat(f32::from_le_bytes(array))))
+                } else {
+                    Err(DbError::SerializationError("Insufficient bytes for Float32".to_string()))
+                }
+            }
             DataType::String => {
-                let len = cursor.read_u32::<LittleEndian>()? as usize;
-                let mut string_bytes = vec![0u8;len];
-                cursor.read_exact(&mut string_bytes)?;
-                Ok(Value::String(String::from_utf8(string_bytes).map_err(|e| DbError::InvalidData(e.to_string()))?))
+                if bytes.len() >= 4 {
+                    let mut len_array = [0u8; 4];
+                    len_array.copy_from_slice(&bytes[..4]);
+                    let len = u32::from_le_bytes(len_array) as usize;
+                    if bytes.len() >= 4 + len {
+                        let s = String::from_utf8(bytes[4..4 + len].to_vec())
+                            .map_err(|e| DbError::SerializationError(e.to_string()))?;
+                        Ok(Value::String(s))
+                    } else {
+                        Err(DbError::SerializationError("Insufficient bytes for String".to_string()))
+                    }
+                } else {
+                    Err(DbError::SerializationError("Insufficient bytes for String length".to_string()))
+                }
             }
         }
+    }
+
+    pub fn serialized_size(&self) -> usize {
+        match self {
+            Value::Int32(_) => 4,
+            Value::Float32(_) => 4,
+            Value::String(s) => 4 + s.as_bytes().len(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompressionType {
+    None,
+    Rle,
+    Dictionary,
+}
+
+#[derive(Debug)]
+pub enum DbError {
+    IoError(std::io::Error),
+    SerializationError(String),
+    TypeMismatch,
+    InvalidData(String),
+}
+
+impl From<std::io::Error> for DbError {
+    fn from(err: std::io::Error) -> DbError {
+        DbError::IoError(err)
+    }
+}
+impl std::error::Error for DbError {}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DbError::IoError(e) => write!(f, "IO Error: {}", e),
+            DbError::SerializationError(s) => write!(f, "Serialization Error: {}", s),
+            DbError::TypeMismatch => write!(f, "Type Mismatch"),
+            DbError::InvalidData(s) => write!(f, "Invalid Data: {}", s),
+        }
+    }
+}
+
+impl From<serde_json::Error> for DbError {
+    fn from(err: serde_json::Error) -> DbError {
+        DbError::SerializationError(err.to_string())
     }
 }

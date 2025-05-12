@@ -95,12 +95,9 @@ impl Schema {
             if value.data_type() != col.data_type {
                 println!(
                     "DEBUG: Type mismatch on column '{}': expected {:?}, got {:?}",
-                    col.name, col.data_type, value
+                    col.name, col.data_type, value.data_type()
                 );
-                return Err(DbError::InvalidData(format!(
-                    "Type mismatch on column '{}': expected {:?}, got {:?}",
-                    col.name, col.data_type, value
-                )));
+                return Err(DbError::TypeMismatch);
             }
         }
 
@@ -120,7 +117,7 @@ impl Schema {
         file.lock_exclusive()?;
         let json = serde_json::to_string_pretty(&self.tables)?;
         fs::write(&path, json)?;
-        file.unlock()?;
+        fs2::FileExt::unlock(&file)?;
         Ok(())
     }
 

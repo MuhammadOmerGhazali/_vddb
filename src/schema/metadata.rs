@@ -11,7 +11,8 @@ pub struct BlockInfo {
     pub min: Value,
     pub max: Value,
     pub compression: CompressionType,
-    pub serialized_size: usize,
+    #[serde(default)]
+    pub serialized_size: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -20,6 +21,8 @@ pub struct BlockMetadata {
     pub data_type: DataType,
     pub blocks: Vec<BlockInfo>,
     pub metadata_path: String,
+    #[serde(default)]
+    pub index_enabled: bool,
 }
 
 impl BlockMetadata {
@@ -30,6 +33,7 @@ impl BlockMetadata {
             data_type,
             blocks: Vec::new(),
             metadata_path,
+            index_enabled: false,
         }
     }
 
@@ -45,14 +49,21 @@ impl BlockMetadata {
         if min.data_type() != self.data_type || max.data_type() != self.data_type {
             return Err(DbError::TypeMismatch);
         }
+        println!("DEBUG: Adding block for {}: min={:?}, max={:?}, offset={}", self.column_name, min, max, offset);
         self.blocks.push(BlockInfo {
             offset,
             row_count,
             min,
             max,
             compression,
-            serialized_size,
+            serialized_size: Some(serialized_size),
         });
+        self.save()?;
+        Ok(())
+    }
+
+    pub fn enable_index(&mut self) -> Result<(), DbError> {
+        self.index_enabled = true;
         self.save()?;
         Ok(())
     }
@@ -60,6 +71,7 @@ impl BlockMetadata {
     pub fn save(&self) -> Result<(), DbError> {
         let parent = Path::new(&self.metadata_path)
             .parent()
+            .or_else(|| Some(Path::new("")))
             .ok_or_else(|| DbError::InvalidData("Invalid metadata path".to_string()))?;
         fs::create_dir_all(parent)?;
         let json = serde_json::to_string_pretty(&self)?;
@@ -79,6 +91,7 @@ impl BlockMetadata {
             data_type,
             blocks: deserialized.blocks,
             metadata_path,
+            index_enabled: deserialized.index_enabled,
         })
     }
 
@@ -86,21 +99,21 @@ impl BlockMetadata {
         if let Some(cond) = condition {
             fn matches_condition(block: &BlockInfo, condition: &Condition, column_name: &str) -> bool {
                 match condition {
-                    Condition::GreaterThan(col, value) if col == column_name => match (&block.max, value) {
-                        (Value::Int32(max), Value::Int32(v)) => max > v,
-                        (Value::Float32(max), Value::Float32(v)) => max > v,
-                        (Value::String(max), Value::String(v)) => max > v,
+                    Condition::GreaterThan(col, value) if col == column_name => match (&block.min, &block.max, value) {
+                        (Value::Int32(_min), Value::Int32(max), Value::Int32(v)) => *max > *v,
+                        (Value::Float32(_min), Value::Float32(max), Value::Float32(v)) => *max > *v,
+                        (Value::String(_min), Value::String(max), Value::String(v)) => max > v,
                         _ => false,
                     },
-                    Condition::LessThan(col, value) if col == column_name => match (&block.min, value) {
-                        (Value::Int32(min), Value::Int32(v)) => min < v,
-                        (Value::Float32(min), Value::Float32(v)) => min < v,
-                        (Value::String(min), Value::String(v)) => min < v,
+                    Condition::LessThan(col, value) if col == column_name => match (&block.min, &block.max, value) {
+                        (Value::Int32(min), Value::Int32(_max), Value::Int32(v)) => *min < *v,
+                        (Value::Float32(min), Value::Float32(_max), Value::Float32(v)) => *min < *v,
+                        (Value::String(min), Value::String(_max), Value::String(v)) => min < v,
                         _ => false,
                     },
                     Condition::Equal(col, value) if col == column_name => match (&block.min, &block.max, value) {
-                        (Value::Int32(min), Value::Int32(max), Value::Int32(v)) => min <= v && v <= max,
-                        (Value::Float32(min), Value::Float32(max), Value::Float32(v)) => min <= v && v <= max,
+                        (Value::Int32(min), Value::Int32(max), Value::Int32(v)) => *min <= *v && *v <= *max,
+                        (Value::Float32(min), Value::Float32(max), Value::Float32(v)) => *min <= *v && *v <= *max,
                         (Value::String(min), Value::String(max), Value::String(v)) => min <= v && v <= max,
                         _ => false,
                     },
@@ -110,14 +123,19 @@ impl BlockMetadata {
                     Condition::Or(left, right) => {
                         matches_condition(block, left, column_name) || matches_condition(block, right, column_name)
                     }
-                    _ => false,
+                    _ => true, // Return all blocks if condition references another column
                 }
             }
-
-            self.blocks
+            let blocks: Vec<&BlockInfo> = self.blocks
                 .iter()
-                .filter(|block| matches_condition(block, cond, &self.column_name))
-                .collect()
+                .filter(|block| {
+                    let result = matches_condition(block, cond, &self.column_name);
+                    println!("DEBUG: Block offset {} for {} with condition {:?}: {}", block.offset, self.column_name, cond, result);
+                    result
+                })
+                .collect();
+            println!("DEBUG: Selected blocks for {} with condition {:?}: {:?}", self.column_name, cond, blocks.iter().map(|b| b.offset).collect::<Vec<_>>());
+            blocks
         } else {
             self.blocks.iter().collect()
         }

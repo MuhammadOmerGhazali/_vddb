@@ -44,12 +44,13 @@ impl BufferManager {
     }
 }
 
-impl ColumnStore {
-    pub fn read_block(&self, block_info: &BlockInfo) -> Result<Block, DbError> {
-        let mut file = self.file.try_clone()?;
-        file.seek(SeekFrom::Start(block_info.offset))?;
-        let mut data = vec![0u8; block_info.serialized_size];
-        file.read_exact(&mut data)?;
-        Block::deserialize(&data, &self.column.data_type, block_info.compression)
-    }
-}
+// impl ColumnStore {
+//     pub fn read_block(&self, block_info: &BlockInfo) -> Result<Block, DbError> {
+//         let mut file = self.file.try_clone()?;
+//         file.seek(SeekFrom::Start(block_info.offset))?;
+//         let size = block_info.serialized_size.unwrap_or(block_info.row_count * 8);
+//         let mut data = vec![0u8; size];
+//         file.read_exact(&mut data)?;
+//         Block::deserialize(&data, &self.column.data_type, block_info.compression.clone())
+//     }
+// }

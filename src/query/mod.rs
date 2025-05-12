@@ -1,9 +1,9 @@
-use crate::types::{Value, DbError};
+use crate::types::Value;
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub enum Condition {
-    GreaterThan(String, Value),
     Equal(String, Value),
+    GreaterThan(String, Value),
     LessThan(String, Value),
     And(Box<Condition>, Box<Condition>),
     Or(Box<Condition>, Box<Condition>),
