@@ -1,6 +1,7 @@
-use crate::types::{DbError, DataType, Value};
+use crate::types::{DataType, DbError, Value};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path::Path};
+use std::collections::HashMap;
+use std::fs;
 use fs2::FileExt;
 
 pub mod metadata;
@@ -19,20 +20,13 @@ pub struct Table {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MaterializedView {
-    pub name: String,
-    pub query: String,
-    pub table: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Schema {
     pub tables: HashMap<String, Table>,
     pub data_dir: String,
 }
 
 impl Schema {
-    pub fn new_schema(data_dir: &str) -> Result<Schema, DbError> {
+    pub fn new_schema(data_dir: &str) -> Result<Self, DbError> {
         fs::create_dir_all(data_dir)?;
         Ok(Schema {
             tables: HashMap::new(),
@@ -44,6 +38,14 @@ impl Schema {
         if self.tables.contains_key(name) {
             return Err(DbError::InvalidData(format!("Table {} already exists", name)));
         }
+        if columns.is_empty() {
+            return Err(DbError::InvalidData("Table must have at least one column".to_string()));
+        }
+        for col in &columns {
+            if col.name.is_empty() {
+                return Err(DbError::InvalidData("Column name cannot be empty".to_string()));
+            }
+        }
         self.tables.insert(
             name.to_string(),
             Table {
@@ -52,30 +54,8 @@ impl Schema {
                 row_count: 0,
             },
         );
-        Ok(())
-    }
-
-    pub fn create_table(&mut self, name: String, columns: Vec<Column>) -> Result<Table, DbError> {
-        if self.tables.contains_key(&name) {
-            return Err(DbError::InvalidData(format!("Table {} already exists.", name)));
-        }
-        if columns.is_empty() {
-            return Err(DbError::InvalidData("Table must have at least one column".to_string()));
-        }
-        for col in &columns {
-            if col.name.is_empty() {
-                return Err(DbError::InvalidData("Column name cannot be empty.".to_string()));
-            }
-        }
-
-        let table = Table {
-            name: name.clone(),
-            columns,
-            row_count: 0,
-        };
-        self.tables.insert(name.clone(), table.clone());
         self.save()?;
-        Ok(table)
+        Ok(())
     }
 
     pub fn get_table(&self, name: &str) -> Option<&Table> {
@@ -88,15 +68,15 @@ impl Schema {
             .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?;
 
         if values.len() != table_def.columns.len() {
-            return Err(DbError::InvalidData("Mismatched column count".to_string()));
+            return Err(DbError::InvalidData(format!(
+                "Expected {} columns, got {}",
+                table_def.columns.len(),
+                values.len()
+            )));
         }
 
         for (value, col) in values.iter().zip(table_def.columns.iter()) {
             if value.data_type() != col.data_type {
-                println!(
-                    "DEBUG: Type mismatch on column '{}': expected {:?}, got {:?}",
-                    col.name, col.data_type, value.data_type()
-                );
                 return Err(DbError::TypeMismatch);
             }
         }
@@ -115,19 +95,21 @@ impl Schema {
             .create(true)
             .open(&path)?;
         file.lock_exclusive()?;
-        let json = serde_json::to_string_pretty(&self.tables)?;
+        let json = serde_json::to_string_pretty(&self.tables)
+            .map_err(|e| DbError::SerializationError(e.to_string()))?;
         fs::write(&path, json)?;
         fs2::FileExt::unlock(&file)?;
         Ok(())
     }
 
-    pub fn load(data_dir: &str) -> Result<Schema, DbError> {
+    pub fn load(data_dir: &str) -> Result<Self, DbError> {
         let path = format!("{}/schema.json", data_dir);
-        if !Path::new(&path).exists() {
-            return Ok(Schema::new_schema(data_dir)?);
+        if !std::path::Path::new(&path).exists() {
+            return Self::new_schema(data_dir);
         }
         let json = fs::read_to_string(&path)?;
-        let tables: HashMap<String, Table> = serde_json::from_str(&json)?;
+        let tables: HashMap<String, Table> = serde_json::from_str(&json)
+            .map_err(|e| DbError::SerializationError(e.to_string()))?;
         Ok(Schema {
             tables,
             data_dir: data_dir.to_string(),

@@ -1,5 +1,6 @@
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DataType {
@@ -8,7 +9,7 @@ pub enum DataType {
     String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord ,Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
     Int32(i32),
     Float32(OrderedFloat<f32>),
@@ -99,6 +100,8 @@ pub enum DbError {
     SerializationError(String),
     TypeMismatch,
     InvalidData(String),
+    TransactionError(String),
+    QueryError(String),
 }
 
 impl From<std::io::Error> for DbError {
@@ -106,21 +109,30 @@ impl From<std::io::Error> for DbError {
         DbError::IoError(err)
     }
 }
+
+impl From<serde_json::Error> for DbError {
+    fn from(err: serde_json::Error) -> DbError {
+        DbError::SerializationError(err.to_string())
+    }
+}
+
+impl From<bincode::ErrorKind> for DbError {
+    fn from(err: bincode::ErrorKind) -> DbError {
+        DbError::SerializationError(err.to_string())
+    }
+}
+
 impl std::error::Error for DbError {}
 
-impl std::fmt::Display for DbError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for DbError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DbError::IoError(e) => write!(f, "IO Error: {}", e),
             DbError::SerializationError(s) => write!(f, "Serialization Error: {}", s),
             DbError::TypeMismatch => write!(f, "Type Mismatch"),
             DbError::InvalidData(s) => write!(f, "Invalid Data: {}", s),
+            DbError::TransactionError(s) => write!(f, "Transaction Error: {}", s),
+            DbError::QueryError(s) => write!(f, "Query Error: {}", s),
         }
-    }
-}
-
-impl From<serde_json::Error> for DbError {
-    fn from(err: serde_json::Error) -> DbError {
-        DbError::SerializationError(err.to_string())
     }
 }

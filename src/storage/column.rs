@@ -11,27 +11,27 @@ use std::io::{Read, Seek, SeekFrom, Write};
 pub struct ColumnStore {
     pub column: Column,
     pub metadata: BlockMetadata,
-    pub file: File,
-    pub path: String,
+    pub segment_dir: String,
+    pub data_dir: String,
 }
 
 impl ColumnStore {
-    pub fn new(column: &Column, path: &str, data_dir: &str) -> Result<ColumnStore, DbError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)?;
+    pub fn new(column: &Column, segment_dir: &str, data_dir: &str) -> Result<Self, DbError> {
         let metadata = BlockMetadata::load(&column.name, column.data_type.clone(), data_dir)?;
         Ok(ColumnStore {
             column: column.clone(),
             metadata,
-            file,
-            path: path.to_string(),
+            segment_dir: segment_dir.to_string(),
+            data_dir: data_dir.to_string(),
         })
     }
 
-    pub fn append(&mut self, values: &[Value], compression: CompressionType) -> Result<(), DbError> {
+    pub fn append_to_segment(
+        &mut self,
+        values: &[Value],
+        compression: CompressionType,
+        segment_path: &str,
+    ) -> Result<u64, DbError> {
         for value in values {
             if value.data_type() != self.column.data_type {
                 return Err(DbError::TypeMismatch);
@@ -42,52 +42,62 @@ impl ColumnStore {
         let max = values.iter().max_by(|a, b| a.cmp(b)).cloned().unwrap_or(Value::Int32(0));
         let serialized = compress(&block.values, compression.clone())?;
         let serialized_size = serialized.len();
-        println!(
-            "DEBUG: Appending block for column {} with compression {:?}, size {}, values {:?}",
-            self.column.name, compression, serialized_size, values
-        );
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(segment_path)?;
+        let offset = file.seek(SeekFrom::End(0))?;
+        file.write_all(&serialized)?;
+        file.flush()?;
+
         self.metadata.add_block(
             min,
             max,
-            self.file.seek(SeekFrom::End(0))?,
+            offset,
             values.len(),
             compression,
             serialized_size,
+            segment_path,
         )?;
-        self.file.write_all(&serialized)?;
-        self.file.flush()?;
-        Ok(())
+        Ok(offset)
     }
 
     pub fn read(&self, condition: Option<&Condition>, buffer: &mut BufferManager) -> Result<Vec<Value>, DbError> {
         let blocks = self.metadata.get_blocks(condition);
         let mut values = Vec::new();
-        let mut seen_offsets = std::collections::HashSet::new();
+        let mut seen_blocks = std::collections::HashSet::new();
         for block_info in blocks {
-            if seen_offsets.insert(block_info.offset) {
-                let block = self.read_block(block_info)?;
-                println!(
-                    "DEBUG: Reading block at offset {} for column {}: {:?}", 
-                    block_info.offset, self.column.name, block.values
-                );
-                values.extend(block.values);
+            let block_key = (block_info.offset, block_info.segment_path.clone().unwrap_or_default());
+            if seen_blocks.insert(block_key) {
+                match self.read_block(block_info, buffer) {
+                    Ok(block) => values.extend(block.values),
+                    Err(e) => {
+                        log::warn!("Failed to read block at offset {}: {}", block_info.offset, e);
+                        continue;
+                    }
+                }
             }
         }
         Ok(values)
     }
 
-    pub fn read_block(&self, block_info: &BlockInfo) -> Result<Block, DbError> {
-        println!(
-            "DEBUG: Reading block at offset {} for column {} with compression {:?}", 
-            block_info.offset, self.column.name, block_info.compression
-        );
-        let mut file = self.file.try_clone()?;
+    pub fn read_block(&self, block_info: &BlockInfo, _buffer: &mut BufferManager) -> Result<Block, DbError> {
+        let segment_path = block_info.segment_path.as_ref().ok_or_else(|| {
+            DbError::InvalidData("Segment path missing".to_string())
+        })?;
+        let mut file = File::open(segment_path).map_err(|e| {
+            DbError::IoError(std::io::Error::new(
+                e.kind(),
+                format!("Failed to open segment {}: {}", segment_path, e),
+            ))
+        })?;
         file.seek(SeekFrom::Start(block_info.offset))?;
-        let size = block_info.serialized_size.unwrap_or(block_info.row_count * 8);
-        println!("DEBUG: Reading {} bytes", size);
+        let size = block_info.serialized_size.ok_or_else(|| {
+            DbError::InvalidData("Serialized size missing".to_string())
+        })?;
         let mut data = vec![0u8; size];
         file.read_exact(&mut data)?;
-        println!("DEBUG: Raw bytes: {:?}", &data[..std::cmp::min(data.len(), 16)]); // Log first 16 bytes
         Block::deserialize(&data, &self.column.data_type, block_info.compression.clone())
     }
 }
