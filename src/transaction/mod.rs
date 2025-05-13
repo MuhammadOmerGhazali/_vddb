@@ -1,9 +1,9 @@
-use crate::query::{Query, planner:: QueryEngine};
+use crate::query::{Query, planner::QueryEngine};
 use crate::storage::StorageManager;
 use crate::types::DbError;
 use crate::Value;
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 
@@ -26,22 +26,24 @@ pub struct TransactionManager {
 }
 
 impl TransactionManager {
-    pub fn new(storage: Arc<Mutex<StorageManager>>) -> Self {
+    pub fn new(storage: Arc<Mutex<StorageManager>>) -> Result<Self, DbError> {
         let data_dir = {
-            let binding = storage.lock().unwrap();
-            binding.data_dir().to_string()
+            let storage_guard = storage.lock().unwrap();
+            storage_guard.data_dir().to_string()
         };
+        let wal_dir = format!("{}/wal", data_dir);
+        fs::create_dir_all(&wal_dir)?;
         let wal = OpenOptions::new()
             .write(true)
             .append(true)
             .create(true)
-            .open(format!("{}/wal/wal.log", data_dir))
-            .expect("Failed to open WAL");
-        TransactionManager {
-            storage: Arc::clone(&storage),
+            .open(format!("{}/wal.log", wal_dir))
+            .map_err(|e| DbError::IoError(e))?;
+        Ok(TransactionManager {
+            storage,
             next_tx_id: 1,
             wal,
-        }
+        })
     }
 
     pub fn begin_transaction(&mut self) -> Transaction {

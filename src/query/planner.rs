@@ -101,25 +101,20 @@ impl QueryEngine {
         aggregations: &[Aggregation],
         condition: Option<Condition>,
     ) -> Result<Vec<Vec<Value>>, DbError> {
-        let values = self.storage.lock().unwrap().read_column(
-            table,
-            &aggregations
-                .first()
-                .map(|agg| match agg {
-                    Aggregation::Count => "ID".to_string(),
-                    Aggregation::Sum(col) | Aggregation::Avg(col) | Aggregation::Min(col) | Aggregation::Max(col) => col.clone(),
-                })
-                .unwrap_or("ID".to_string()),
-            condition.as_ref(),
-        )?;
-
         let mut results = Vec::new();
         for agg in aggregations {
+            let column = match agg {
+                Aggregation::Count => "ID".to_string(),
+                Aggregation::Sum(col) | Aggregation::Avg(col) | Aggregation::Min(col) | Aggregation::Max(col) => col.clone(),
+            };
+            let values = self.storage.lock().unwrap().read_column(table, &column, condition.as_ref())?;
+
             let result = match agg {
                 Aggregation::Count => Value::Int32(values.len() as i32),
                 Aggregation::Sum(_) => values.iter().fold(Value::Float32(ordered_float::OrderedFloat(0.0)), |acc, v| {
                     match (acc.clone(), v) {
                         (Value::Float32(a), Value::Float32(b)) => Value::Float32(a + b),
+                        (Value::Float32(a), Value::Int32(b)) => Value::Float32(a + ordered_float::OrderedFloat(*b as f32)),
                         _ => acc,
                     }
                 }),
@@ -127,6 +122,7 @@ impl QueryEngine {
                     let sum = values.iter().fold(Value::Float32(ordered_float::OrderedFloat(0.0)), |acc, v| {
                         match (acc.clone(), v) {
                             (Value::Float32(a), Value::Float32(b)) => Value::Float32(a + b),
+                            (Value::Float32(a), Value::Int32(b)) => Value::Float32(a + ordered_float::OrderedFloat(*b as f32)),
                             _ => acc,
                         }
                     });
@@ -141,12 +137,12 @@ impl QueryEngine {
                     .iter()
                     .min_by(|a, b| a.cmp(b))
                     .cloned()
-                    .unwrap_or(Value::Int32(0)),
+                    .unwrap_or(Value::Float32(ordered_float::OrderedFloat(0.0))),
                 Aggregation::Max(_) => values
                     .iter()
                     .max_by(|a, b| a.cmp(b))
                     .cloned()
-                    .unwrap_or(Value::Int32(0)),
+                    .unwrap_or(Value::Float32(ordered_float::OrderedFloat(0.0))),
             };
             results.push(result);
         }
