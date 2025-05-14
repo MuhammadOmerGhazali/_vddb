@@ -1,6 +1,6 @@
 use crate::types::{CompressionType, DataType, DbError, Value};
 use crate::query::Condition;
-use crate::query::evaluator::evaluate_condition_block; // Fixed import
+use crate::query::evaluator::evaluate_condition_block;
 use serde::{Serialize, Deserialize};
 use std::fs;
 use std::path::Path;
@@ -21,14 +21,16 @@ pub struct BlockMetadata {
     pub column_name: String,
     pub data_type: DataType,
     pub blocks: Vec<BlockInfo>,
+    pub data_dir: String, // Added to store data_dir
 }
 
 impl BlockMetadata {
-    pub fn new(column_name: &str, data_type: DataType) -> Self {
+    pub fn new(column_name: &str, data_type: DataType, data_dir: &str) -> Self {
         BlockMetadata {
             column_name: column_name.to_string(),
             data_type,
             blocks: Vec::new(),
+            data_dir: data_dir.to_string(),
         }
     }
 
@@ -41,7 +43,7 @@ impl BlockMetadata {
                 .map_err(|e| DbError::SerializationError(e.to_string()))?;
             Ok(metadata)
         } else {
-            Ok(Self::new(column_name, data_type))
+            Ok(Self::new(column_name, data_type, data_dir))
         }
     }
 
@@ -69,9 +71,8 @@ impl BlockMetadata {
     }
 
     pub fn save(&self) -> Result<(), DbError> {
-        let data_dir = "data";
-        fs::create_dir_all(format!("{}/metadata", data_dir))?;
-        let metadata_path = format!("{}/metadata/{}.json", data_dir, self.column_name);
+        fs::create_dir_all(format!("{}/metadata", self.data_dir))?;
+        let metadata_path = format!("{}/metadata/{}.json", self.data_dir, self.column_name);
         let contents = serde_json::to_string_pretty(self)
             .map_err(|e| DbError::SerializationError(e.to_string()))?;
         fs::write(&metadata_path, contents)

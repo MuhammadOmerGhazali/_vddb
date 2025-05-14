@@ -10,6 +10,8 @@ pub enum Condition {
     Equal(String, Value),
     GreaterThan(String, Value),
     LessThan(String, Value),
+    LessThanOrEqual(String, Value),
+    GreaterThanOrEqual(String, Value),
     And(Box<Condition>, Box<Condition>),
     Or(Box<Condition>, Box<Condition>),
 }
@@ -51,12 +53,26 @@ pub enum Query {
         table: String,
         columns: Vec<(String, DataType)>,
     },
+    Delete {
+        table: String,
+        condition: Option<Condition>,
+    },
+    DropTable {
+        table: String,
+    },
+    StartTransaction,
+    Commit,
+    Rollback,
 }
 
 pub fn collect_condition_columns(condition: &Condition) -> std::collections::HashSet<String> {
     let mut columns = std::collections::HashSet::new();
     match condition {
-        Condition::Equal(col, _) | Condition::GreaterThan(col, _) | Condition::LessThan(col, _) => {
+        Condition::Equal(col, _) | 
+        Condition::GreaterThan(col, _) | 
+        Condition::LessThan(col, _) | 
+        Condition::LessThanOrEqual(col, _) | 
+        Condition::GreaterThanOrEqual(col, _) => {
             columns.insert(col.clone());
         }
         Condition::And(left, right) | Condition::Or(left, right) => {

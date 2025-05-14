@@ -55,6 +55,20 @@ impl Index {
         Ok(offsets)
     }
 
+    pub fn clear(&mut self) -> Result<(), DbError> {
+        // Clear the in-memory map
+        self.map.clear();
+
+        // Truncate the index file
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&self.path)?;
+        file.flush()?;
+        Ok(())
+    }
+
     fn save(&self) -> Result<(), DbError> {
         let mut file = OpenOptions::new()
             .write(true)

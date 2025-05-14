@@ -63,16 +63,18 @@ impl TransactionManager {
         let mut results = Vec::new();
         let mut query_engine = QueryEngine::new(Arc::clone(&self.storage));
         for query in tx.queries.drain(..) {
-            results.extend(query_engine.execute(query)?);
+            let result = query_engine.execute(query)?;
+            if !result.is_empty() {
+                results.push(result);
+            }
         }
 
         self.wal.set_len(0)?;
         self.wal.seek(SeekFrom::Start(0))?;
-        Ok(results)
+        Ok(results.into_iter().flatten().collect())
     }
 
     pub fn rollback_transaction(&mut self, _tx: Transaction) -> Result<(), DbError> {
-        // For immutable database, rollback clears WAL and relies on not having committed changes
         self.wal.set_len(0)?;
         self.wal.seek(SeekFrom::Start(0))?;
         Ok(())

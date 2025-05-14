@@ -2,6 +2,7 @@ use crate::query::{Aggregation, Condition, Query};
 use crate::schema::Table;
 use crate::storage::StorageManager;
 use crate::types::{DbError, Value};
+use crate::DataType;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +21,22 @@ impl QueryEngine {
                 table,
                 columns,
                 condition,
-            } => self.execute_select(&table, &columns, condition),
+            } => {
+                let columns = if columns.is_empty() {
+                    let storage_guard = self.storage.lock().unwrap();
+                    storage_guard
+                        .schema()
+                        .get_table(&table)
+                        .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?
+                        .columns
+                        .iter()
+                        .map(|c| c.name.clone())
+                        .collect()
+                } else {
+                    columns
+                };
+                self.execute_select(&table, &columns, condition)
+            }
             Query::SelectAggregate {
                 table,
                 aggregations,
@@ -57,6 +73,17 @@ impl QueryEngine {
                 self.storage.lock().unwrap().create_table(&table_def)?;
                 Ok(vec![])
             }
+            Query::Delete { table, condition } => {
+                self.storage.lock().unwrap().delete_rows(&table, condition.as_ref())?;
+                Ok(vec![])
+            }
+            Query::DropTable { table } => {
+                self.storage.lock().unwrap().drop_table(&table)?;
+                Ok(vec![])
+            }
+            Query::StartTransaction | Query::Commit | Query::Rollback => {
+                Ok(vec![])
+            }
         }
     }
 
@@ -66,31 +93,60 @@ impl QueryEngine {
         columns: &[String],
         condition: Option<Condition>,
     ) -> Result<Vec<Vec<Value>>, DbError> {
-        let _table_def = self
-            .storage
-            .lock()
-            .unwrap()
-            .schema()
-            .get_table(table)
-            .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?;
+        let table_def = {
+            let storage_guard = self.storage.lock().unwrap();
+            storage_guard
+                .schema()
+                .get_table(table)
+                .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?
+                .clone()
+        };
 
-        let mut column_values = HashMap::new();
         for col in columns {
-            let values = self.storage.lock().unwrap().read_column(table, col, condition.as_ref())?;
+            if !table_def.columns.iter().any(|c| c.name == *col) {
+                return Err(DbError::InvalidData(format!("Column {}.{} not found", table, col)));
+            }
+        }
+
+        let mut required_columns = columns.to_vec();
+        if let Some(ref cond) = condition {
+            let condition_columns = crate::query::collect_condition_columns(cond);
+            for col in condition_columns {
+                if !table_def.columns.iter().any(|c| c.name == col) {
+                    return Err(DbError::InvalidData(format!("Column {}.{} not found in condition", table, col)));
+                }
+                if !required_columns.contains(&col) {
+                    required_columns.push(col);
+                }
+            }
+        }
+
+        let mut storage_guard = self.storage.lock().unwrap();
+        let mut column_values = HashMap::new();
+        let mut min_row_count = usize::MAX;
+        for col in &required_columns {
+            let values = storage_guard.read_column(table, col, condition.as_ref())?;
+            min_row_count = min_row_count.min(values.len());
             column_values.insert(col.clone(), values);
         }
 
-        let row_count = column_values
-            .values()
-            .next()
-            .map_or(0, |v| v.len());
         let mut result = Vec::new();
-        for i in 0..row_count {
-            let row = columns
-                .iter()
-                .map(|col| column_values.get(col).unwrap()[i].clone())
-                .collect();
-            result.push(row);
+        for i in 0..min_row_count {
+            if let Some(cond) = &condition {
+                if crate::query::evaluator::evaluate_condition_row(cond, &column_values, i)? {
+                    let row = columns
+                        .iter()
+                        .map(|col| column_values.get(col).unwrap()[i].clone())
+                        .collect();
+                    result.push(row);
+                }
+            } else {
+                let row = columns
+                    .iter()
+                    .map(|col| column_values.get(col).unwrap()[i].clone())
+                    .collect();
+                result.push(row);
+            }
         }
         Ok(result)
     }
@@ -101,28 +157,57 @@ impl QueryEngine {
         aggregations: &[Aggregation],
         condition: Option<Condition>,
     ) -> Result<Vec<Vec<Value>>, DbError> {
+        let table_def = {
+            let storage_guard = self.storage.lock().unwrap();
+            storage_guard
+                .schema()
+                .get_table(table)
+                .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?
+                .clone()
+        };
+
+        let mut storage_guard = self.storage.lock().unwrap();
         let mut results = Vec::new();
         for agg in aggregations {
             let column = match agg {
                 Aggregation::Count => "ID".to_string(),
                 Aggregation::Sum(col) | Aggregation::Avg(col) | Aggregation::Min(col) | Aggregation::Max(col) => col.clone(),
             };
-            let values = self.storage.lock().unwrap().read_column(table, &column, condition.as_ref())?;
+            let col_def = table_def
+                .get_column(&column)
+                .ok_or_else(|| DbError::InvalidData(format!("Column {}.{} not found", table, column)))?;
+            let values = storage_guard.read_column(table, &column, condition.as_ref())?;
 
             let result = match agg {
                 Aggregation::Count => Value::Int32(values.len() as i32),
-                Aggregation::Sum(_) => values.iter().fold(Value::Float32(ordered_float::OrderedFloat(0.0)), |acc, v| {
-                    match (acc.clone(), v) {
-                        (Value::Float32(a), Value::Float32(b)) => Value::Float32(a + b),
-                        (Value::Float32(a), Value::Int32(b)) => Value::Float32(a + ordered_float::OrderedFloat(*b as f32)),
-                        _ => acc,
+                Aggregation::Sum(_) => {
+                    if col_def.data_type != DataType::Float32 && col_def.data_type != DataType::Int32 {
+                        return Err(DbError::InvalidData(format!(
+                            "SUM not supported for type {:?}", col_def.data_type
+                        )));
                     }
-                }),
+                    values.iter().fold(Value::Float32(ordered_float::OrderedFloat(0.0)), |acc, v| {
+                        match (acc.clone(), v) {
+                            (Value::Float32(a), Value::Float32(b)) => Value::Float32(a + b),
+                            (Value::Float32(a), Value::Int32(b)) => {
+                                Value::Float32(a + ordered_float::OrderedFloat(*b as f32))
+                            }
+                            _ => acc,
+                        }
+                    })
+                }
                 Aggregation::Avg(_) => {
+                    if col_def.data_type != DataType::Float32 && col_def.data_type != DataType::Int32 {
+                        return Err(DbError::InvalidData(format!(
+                            "AVG not supported for type {:?}", col_def.data_type
+                        )));
+                    }
                     let sum = values.iter().fold(Value::Float32(ordered_float::OrderedFloat(0.0)), |acc, v| {
                         match (acc.clone(), v) {
                             (Value::Float32(a), Value::Float32(b)) => Value::Float32(a + b),
-                            (Value::Float32(a), Value::Int32(b)) => Value::Float32(a + ordered_float::OrderedFloat(*b as f32)),
+                            (Value::Float32(a), Value::Int32(b)) => {
+                                Value::Float32(a + ordered_float::OrderedFloat(*b as f32))
+                            }
                             _ => acc,
                         }
                     });
@@ -158,19 +243,13 @@ impl QueryEngine {
         columns: &[String],
         condition: Option<Condition>,
     ) -> Result<Vec<Vec<Value>>, DbError> {
-        let left_values = self
-            .storage
-            .lock()
-            .unwrap()
-            .read_column(left_table, left_column, condition.as_ref())?;
-        let right_values = self
-            .storage
-            .lock()
-            .unwrap()
-            .read_column(right_table, right_column, condition.as_ref())?;
+        let mut storage_guard = self.storage.lock().unwrap();
+        let left_values = storage_guard.read_column(left_table, left_column, condition.as_ref())?;
+        let right_values = storage_guard.read_column(right_table, right_column, condition.as_ref())?;
 
-        let mut result = Vec::new();
         let mut column_values = HashMap::new();
+        let mut min_row_count_left = usize::MAX;
+        let mut min_row_count_right = usize::MAX;
         for col in columns {
             let (table, col_name) = if col.contains('.') {
                 let parts = col.split('.').collect::<Vec<_>>();
@@ -178,19 +257,31 @@ impl QueryEngine {
             } else {
                 (left_table, col.as_str())
             };
-            column_values.insert(
-                col.clone(),
-                self.storage.lock().unwrap().read_column(table, col_name, condition.as_ref())?,
-            );
+            let values = storage_guard.read_column(table, col_name, condition.as_ref())?;
+            if table == right_table {
+                min_row_count_right = min_row_count_right.min(values.len());
+            } else {
+                min_row_count_left = min_row_count_left.min(values.len());
+            }
+            column_values.insert(col.clone(), values);
         }
 
-        for (i, left_val) in left_values.iter().enumerate() {
-            for (j, right_val) in right_values.iter().enumerate() {
+        let mut result = Vec::new();
+        for (i, left_val) in left_values.iter().enumerate().take(min_row_count_left) {
+            for (j, right_val) in right_values.iter().enumerate().take(min_row_count_right) {
                 if left_val == right_val {
-                    let row = columns
-                        .iter()
-                        .map(|col| column_values.get(col).unwrap()[if col.starts_with(right_table) { j } else { i }].clone())
-                        .collect();
+                    let row = columns.iter().map(|col| {
+                        let values = column_values.get(col).unwrap();
+                        let index = if col.starts_with(right_table) { j } else { i };
+                        if index < values.len() {
+                            Ok(values[index].clone())
+                        } else {
+                            Err(DbError::InvalidData(format!(
+                                "Index {} out of bounds for column {} (len: {})",
+                                index, col, values.len()
+                            )))
+                        }
+                    }).collect::<Result<Vec<Value>, DbError>>()?;
                     result.push(row);
                 }
             }

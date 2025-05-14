@@ -13,7 +13,11 @@ pub fn parse_query(input: &str) -> Result<Query, DbError> {
         "CREATE" => parse_create_table(input),
         "INSERT" => parse_insert(input),
         "SELECT" => parse_select(input),
-        "JOIN" => parse_join(input),
+        "DELETE" => parse_delete(input),
+        "DROP" => parse_drop_table(input),
+        "START" => parse_start_transaction(input),
+        "COMMIT" => parse_commit(input),
+        "ROLLBACK" => parse_rollback(input),
         _ => Err(DbError::QueryError(format!("Unknown command: {}", parts[0]))),
     }
 }
@@ -87,16 +91,28 @@ fn parse_select(input: &str) -> Result<Query, DbError> {
         .find("FROM")
         .ok_or_else(|| DbError::QueryError("Missing FROM clause".to_string()))?;
     let columns_str = input[6..columns_end].trim();
-    let columns = columns_str
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .collect::<Vec<_>>();
+    let from_clause = input[columns_end + 4..].trim();
+    
+    // Check for JOIN
+    if from_clause.to_uppercase().contains(" JOIN ") {
+        return parse_join(input);
+    }
+
     let from_end = input.find("WHERE").unwrap_or(input.len());
     let table = input[columns_end + 4..from_end].trim().to_string();
     let condition = if from_end < input.len() {
         Some(parse_condition(&input[from_end + 5..].trim())?)
     } else {
         None
+    };
+
+    let columns = if columns_str == "*" {
+        Vec::new() // Will be expanded in planner
+    } else {
+        columns_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
     };
 
     if columns.iter().any(|c| {
@@ -140,38 +156,45 @@ fn parse_select(input: &str) -> Result<Query, DbError> {
 }
 
 fn parse_join(input: &str) -> Result<Query, DbError> {
-    let parts = input.split("ON").collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return Err(DbError::QueryError("Invalid JOIN syntax".to_string()));
-    }
-    let select_part = parts[0].trim();
-    let on_part = parts[1].trim();
-    let select_parts = select_part.split_whitespace().collect::<Vec<_>>();
-    if select_parts.len() < 6 {
-        return Err(DbError::QueryError("Invalid JOIN syntax".to_string()));
-    }
-    let left_table = select_parts[1].to_string();
-    let right_table = select_parts[3].to_string();
-    let columns_start = input
-        .find("SELECT")
-        .ok_or_else(|| DbError::QueryError("Missing SELECT clause in JOIN".to_string()))?
-        + 6;
-    let columns_end = input.find("FROM").unwrap();
-    let columns = input[columns_start..columns_end]
+    let columns_end = input
+        .find("FROM")
+        .ok_or_else(|| DbError::QueryError("Missing FROM clause".to_string()))?;
+    let columns_str = input[6..columns_end].trim();
+    let columns = columns_str
         .split(',')
         .map(|s| s.trim().to_string())
         .collect::<Vec<_>>();
-    let on_parts = on_part.split('=').map(|s| s.trim()).collect::<Vec<_>>();
+
+    let from_clause = input[columns_end + 4..].trim();
+    let join_pos = from_clause.to_uppercase().find(" JOIN ").ok_or_else(|| {
+        DbError::QueryError("Missing JOIN clause".to_string())
+    })?;
+    let on_pos = from_clause.to_uppercase().find(" ON ").ok_or_else(|| {
+        DbError::QueryError("Missing ON clause".to_string())
+    })?;
+    let where_pos = from_clause.to_uppercase().find(" WHERE ");
+
+    let left_table = from_clause[..join_pos].trim().to_string();
+    let right_table = from_clause[join_pos + 6..on_pos].trim().to_string();
+    let on_clause = if let Some(wp) = where_pos {
+        from_clause[on_pos + 4..wp].trim()
+    } else {
+        from_clause[on_pos + 4..].trim()
+    };
+
+    let on_parts = on_clause.split('=').map(|s| s.trim()).collect::<Vec<_>>();
     if on_parts.len() != 2 {
         return Err(DbError::QueryError("Invalid ON clause".to_string()));
     }
-    let left_column = on_parts[0].to_string();
-    let right_column = on_parts[1].to_string();
-    let condition = if let Some(where_pos) = input.find("WHERE") {
-        Some(parse_condition(&input[where_pos + 5..].trim())?)
+    let left_column = on_parts[0].split('.').last().unwrap().to_string();
+    let right_column = on_parts[1].split('.').last().unwrap().to_string();
+
+    let condition = if let Some(wp) = where_pos {
+        Some(parse_condition(&from_clause[wp + 6..].trim())?)
     } else {
         None
     };
+
     Ok(Query::Join {
         left_table,
         right_table,
@@ -182,8 +205,55 @@ fn parse_join(input: &str) -> Result<Query, DbError> {
     })
 }
 
+fn parse_delete(input: &str) -> Result<Query, DbError> {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 3 || parts[1].to_uppercase() != "FROM" {
+        return Err(DbError::QueryError("Invalid DELETE syntax".to_string()));
+    }
+    let table = parts[2].to_string();
+    let condition = if input.to_uppercase().contains("WHERE") {
+        let where_pos = input.to_uppercase().find("WHERE").unwrap();
+        Some(parse_condition(&input[where_pos + 5..].trim())?)
+    } else {
+        None
+    };
+    Ok(Query::Delete { table, condition })
+}
+
+fn parse_drop_table(input: &str) -> Result<Query, DbError> {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 3 || parts[1].to_uppercase() != "TABLE" {
+        return Err(DbError::QueryError("Invalid DROP TABLE syntax".to_string()));
+    }
+    let table = parts[2].to_string();
+    Ok(Query::DropTable { table })
+}
+
+fn parse_start_transaction(input: &str) -> Result<Query, DbError> {
+    if input.to_uppercase() == "START TRANSACTION" {
+        Ok(Query::StartTransaction)
+    } else {
+        Err(DbError::QueryError("Invalid START TRANSACTION syntax".to_string()))
+    }
+}
+
+fn parse_commit(input: &str) -> Result<Query, DbError> {
+    if input.to_uppercase() == "COMMIT" {
+        Ok(Query::Commit)
+    } else {
+        Err(DbError::QueryError("Invalid COMMIT syntax".to_string()))
+    }
+}
+
+fn parse_rollback(input: &str) -> Result<Query, DbError> {
+    if input.to_uppercase() == "ROLLBACK" {
+        Ok(Query::Rollback)
+    } else {
+        Err(DbError::QueryError("Invalid ROLLBACK syntax".to_string()))
+    }
+}
+
 fn parse_condition(input: &str) -> Result<Condition, DbError> {
-    // Handle AND/OR by splitting on keywords
     let input = input.trim();
     if input.contains(" AND ") {
         let parts = input.split(" AND ").collect::<Vec<_>>();
@@ -204,7 +274,6 @@ fn parse_condition(input: &str) -> Result<Condition, DbError> {
         return Ok(Condition::Or(Box::new(left), Box::new(right)));
     }
 
-    // Parse simple condition (e.g., "ID > 1")
     let parts = input.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(DbError::QueryError(format!(
@@ -230,6 +299,8 @@ fn parse_condition(input: &str) -> Result<Condition, DbError> {
         "=" => Ok(Condition::Equal(column, value)),
         ">" => Ok(Condition::GreaterThan(column, value)),
         "<" => Ok(Condition::LessThan(column, value)),
+        "<=" => Ok(Condition::LessThanOrEqual(column, value)),
+        ">=" => Ok(Condition::GreaterThanOrEqual(column, value)),
         _ => Err(DbError::QueryError(format!("Invalid operator: {}", operator))),
     }
 }

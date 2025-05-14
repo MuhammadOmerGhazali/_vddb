@@ -4,6 +4,14 @@ use crate::types::{DbError, Value};
 
 pub fn evaluate_condition_block(condition: &Condition, column_name: &str, block: &BlockInfo) -> bool {
     match condition {
+        Condition::Equal(col, val) if col == column_name => {
+            match (&block.min, &block.max, val) {
+                (Value::Int32(min), Value::Int32(max), Value::Int32(v)) => min <= v && v <= max,
+                (Value::Float32(min), Value::Float32(max), Value::Float32(v)) => min <= v && v <= max,
+                (Value::String(min), Value::String(max), Value::String(v)) => min <= v && v <= max,
+                _ => false,
+            }
+        }
         Condition::GreaterThan(col, val) if col == column_name => {
             match (&block.max, val) {
                 (Value::Int32(max), Value::Int32(v)) => max > v,
@@ -20,11 +28,19 @@ pub fn evaluate_condition_block(condition: &Condition, column_name: &str, block:
                 _ => false,
             }
         }
-        Condition::Equal(col, val) if col == column_name => {
-            match (&block.min, &block.max, val) {
-                (Value::Int32(min), Value::Int32(max), Value::Int32(v)) => min <= v && v <= max,
-                (Value::Float32(min), Value::Float32(max), Value::Float32(v)) => min <= v && v <= max,
-                (Value::String(min), Value::String(max), Value::String(v)) => min <= v && v <= max,
+        Condition::LessThanOrEqual(col, val) if col == column_name => {
+            match (&block.max, val) {
+                (Value::Int32(max), Value::Int32(v)) => max <= v,
+                (Value::Float32(max), Value::Float32(v)) => max <= v,
+                (Value::String(max), Value::String(v)) => max <= v,
+                _ => false,
+            }
+        }
+        Condition::GreaterThanOrEqual(col, val) if col == column_name => {
+            match (&block.min, val) {
+                (Value::Int32(min), Value::Int32(v)) => min >= v,
+                (Value::Float32(min), Value::Float32(v)) => min >= v,
+                (Value::String(min), Value::String(v)) => min >= v,
                 _ => false,
             }
         }
@@ -49,13 +65,13 @@ pub fn evaluate_condition_row(
         Condition::Equal(col, val) => {
             let values = column_values
                 .get(col)
-                .ok_or_else(|| DbError::QueryError(format!("Column {} not found", col)))?;
+                .ok_or_else(|| DbError::QueryError(format!("Column {} not found in condition evaluation", col)))?;
             Ok(values.get(row_index).map_or(false, |v| v == val))
         }
         Condition::GreaterThan(col, val) => {
             let values = column_values
                 .get(col)
-                .ok_or_else(|| DbError::QueryError(format!("Column {} not found", col)))?;
+                .ok_or_else(|| DbError::QueryError(format!("Column {} not found in condition evaluation", col)))?;
             Ok(values.get(row_index).map_or(false, |v| match (v, val) {
                 (Value::Int32(a), Value::Int32(b)) => a > b,
                 (Value::Float32(a), Value::Float32(b)) => a > b,
@@ -66,11 +82,33 @@ pub fn evaluate_condition_row(
         Condition::LessThan(col, val) => {
             let values = column_values
                 .get(col)
-                .ok_or_else(|| DbError::QueryError(format!("Column {} not found", col)))?;
+                .ok_or_else(|| DbError::QueryError(format!("Column {} not found in condition evaluation", col)))?;
             Ok(values.get(row_index).map_or(false, |v| match (v, val) {
                 (Value::Int32(a), Value::Int32(b)) => a < b,
                 (Value::Float32(a), Value::Float32(b)) => a < b,
                 (Value::String(a), Value::String(b)) => a < b,
+                _ => false,
+            }))
+        }
+        Condition::LessThanOrEqual(col, val) => {
+            let values = column_values
+                .get(col)
+                .ok_or_else(|| DbError::QueryError(format!("Column {} not found in condition evaluation", col)))?;
+            Ok(values.get(row_index).map_or(false, |v| match (v, val) {
+                (Value::Int32(a), Value::Int32(b)) => a <= b,
+                (Value::Float32(a), Value::Float32(b)) => a <= b,
+                (Value::String(a), Value::String(b)) => a <= b,
+                _ => false,
+            }))
+        }
+        Condition::GreaterThanOrEqual(col, val) => {
+            let values = column_values
+                .get(col)
+                .ok_or_else(|| DbError::QueryError(format!("Column {} not found in condition evaluation", col)))?;
+            Ok(values.get(row_index).map_or(false, |v| match (v, val) {
+                (Value::Int32(a), Value::Int32(b)) => a >= b,
+                (Value::Float32(a), Value::Float32(b)) => a >= b,
+                (Value::String(a), Value::String(b)) => a >= b,
                 _ => false,
             }))
         }
