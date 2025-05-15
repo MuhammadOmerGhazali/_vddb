@@ -1,23 +1,75 @@
-index is only created on ID and NAME
+-- Setup
+CREATE TABLE Employees (ID INT, Name STRING, Salary FLOAT, DeptID INT)
+CREATE TABLE Departments (DeptID INT, DeptName STRING)
 
-<= turns into different operator
-vddb> SELECT Name FROM Employees WHERE ID > 2 AND Salary <= 1500.0
-Error: Query Error: Invalid operator: <=
-
-
-thread panics if u give multiple queries at once
-VDDB REPL (type EXIT to quit)
-vddb> CREATE TABLE Employees (ID INT, Name STRING, Salary FLOAT, DeptID INT)
-vddb> INSERT INTO Employees VALUES (1, "Alice", 1000.0, 10)
+-- Insert Employees (Batch 1)
+INSERT INTO Employees VALUES (1, "Alice", 1000.0, 10)
 INSERT INTO Employees VALUES (2, "Bob", 1500.0, 20)
 INSERT INTO Employees VALUES (3, "Charlie", 1200.0, 10)
-INSERT INTO Employees VALUES (4, "David", 2000.0, 20)                  
-thread 'main' panicked at src/query/parser.rs:74:35:
-begin <= end (1 <= 0) when slicing `"`
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
-database does not flush until 5 rows are reached 
+-- Insert Employees (Batch 2)
+INSERT INTO Employees VALUES (4, "David", 2000.0, 20)
+INSERT INTO Employees VALUES (5, "Eve", 1800.0, 10)
+INSERT INTO Employees VALUES (6, "Frank", 1600.0, 20)
 
-INSERT INTO Employees VALUES ( 1, "Alice", 1000.0, 10 )
+-- Insert Departments
+INSERT INTO Departments VALUES (10, "Engineering")
+INSERT INTO Departments VALUES (20, "Sales")
+INSERT INTO Departments VALUES (30, "Marketing")
 
+-- Basic Selections
+SELECT * FROM Employees
+SELECT Name, Salary FROM Employees
+SELECT * FROM Departments
+
+-- WHERE Clauses
+SELECT Name, Salary FROM Employees WHERE ID = 2
+SELECT Name FROM Employees WHERE Salary > 1200.0
+SELECT Name FROM Employees WHERE DeptID = 10
+
+-- JOIN
 SELECT Employees.Name, Departments.DeptName FROM Employees JOIN Departments ON Employees.DeptID = Departments.DeptID
+
+-- Aggregations
+SELECT SUM(Salary) FROM Employees
+SELECT COUNT FROM Employees
+SELECT AVG(Salary) FROM Employees
+
+-- Transaction (Commit)
+START TRANSACTION
+INSERT INTO Employees VALUES (7, "Grace", 1700.0, 20)
+INSERT INTO Employees VALUES (8, "Henry", 1400.0, 10)
+INSERT INTO Employees VALUES (9, "Ivy", 1900.0, 20)
+SELECT * FROM Employees
+COMMIT
+
+-- Transaction (Rollback)
+START TRANSACTION
+INSERT INTO Employees VALUES (10, "Jack", 1300.0, 10)
+INSERT INTO Employees VALUES (11, "Kelly", 1550.0, 20)
+INSERT INTO Employees VALUES (12, "Liam", 1650.0, 10)
+SELECT * FROM Employees
+ROLLBACK
+SELECT * FROM Employees
+
+-- Deletion
+DELETE FROM Employees WHERE Salary < 1500.0
+SELECT * FROM Employees
+DELETE FROM Employees
+SELECT * FROM Employees
+
+-- Drop Tables
+DROP TABLE Employees
+SELECT * FROM Employees
+DROP TABLE Departments
+SELECT * FROM Departments
+
+-- Edge Cases
+CREATE TABLE Employees (ID INT, Name STRING, Salary FLOAT, DeptID INT)
+INSERT INTO Employees VALUES (1, "Alice", 1000.0, 10)
+INSERT INTO Employees VALUES (2, "Bob", 1500.0, 20)
+INSERT INTO Employees VALUES (1, "Charlie", 1200.0, 10)
+SELECT * FROM NonExistentTable
+CREATE TABLE TestTable (ID INT)
+SELECT * FROM TestTable
+SELECT * FROM Employees WHERE NonExistentColumn = 1

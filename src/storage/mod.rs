@@ -59,6 +59,7 @@ impl StorageManager {
     pub fn new(data_dir: &str, schema: Schema) -> Result<Self, DbError> {
         fs::create_dir_all(format!("{}/columns", data_dir))?;
         fs::create_dir_all(format!("{}/indexes", data_dir))?;
+        fs::create_dir_all(format!("{}/metadata", data_dir))?;
         let mut columns = HashMap::new();
         let mut indexes = HashMap::new();
         for table in schema.tables() {
@@ -87,7 +88,7 @@ impl StorageManager {
             buffer: BufferManager::new(100_000_000),
             schema,
             pending_rows: HashMap::new(),
-            max_rows_per_segment: 1000, // Increased for batching
+            max_rows_per_segment: 3, // Increased for batching
         })
     }
 

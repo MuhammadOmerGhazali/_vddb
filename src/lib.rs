@@ -17,6 +17,7 @@ pub fn create_database(
     data_dir: &str,
 ) -> Result<(Schema, Arc<Mutex<StorageManager>>, TransactionManager), DbError> {
     let schema = Schema::new_schema(data_dir)?;
+    
     let storage = Arc::new(Mutex::new(StorageManager::new(data_dir, schema.clone())?));
     let tx_manager = TransactionManager::new(storage.clone())?;
     Ok((schema, storage, tx_manager))
