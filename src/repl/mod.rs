@@ -5,6 +5,7 @@ use crate::types::{DbError, Value};
 use prettytable::{format, row, Table};
 use rustyline::{error::ReadlineError, Editor};
 use std::fmt;
+use colored::*;
 
 pub struct Repl {
     tx_manager: TransactionManager,
@@ -31,7 +32,7 @@ impl Repl {
     }
 
     pub fn run(&mut self) -> Result<(), DbError> {
-        println!("VDDB REPL (type EXIT to quit, type HELP for help)");
+        println!("{}","VDDB REPL (type EXIT to quit, type HELP for help)".cyan().bold());
         
         // Initialize rustyline editor with history
         let mut rl = Editor::<()>::new().map_err(|e| DbError::TransactionError(e.to_string()))?;
@@ -40,14 +41,14 @@ impl Repl {
         }
 
         loop {
-            let readline = rl.readline("vddb> ");
+            let readline = rl.readline(&"vddb> ".blue().bold().to_string());
             match readline {
                 Ok(input) => {
                     let input = input.trim();
                     if input.eq_ignore_ascii_case("EXIT") {
                         if let Some(tx) = self.active_transaction.take() {
                             self.tx_manager.rollback_transaction(tx)?;
-                            println!("Active transaction rolled back.");
+                            println!("{}","Active transaction rolled back.".green());
                         }
                         rl.save_history("vddb_history.txt")
                             .map_err(|e| DbError::TransactionError(e.to_string()))?;
@@ -71,31 +72,31 @@ impl Repl {
                             match query {
                                 Query::StartTransaction => {
                                     if self.active_transaction.is_some() {
-                                        println!("Error: Transaction already active");
+                                        println!("{}","Error: Transaction already active".red());
                                         continue;
                                     }
                                     self.active_transaction = Some(self.tx_manager.begin_transaction());
-                                    println!("Transaction started.");
+                                    println!("{}", "Transaction started.".green());
                                 }
                                 Query::Commit => {
                                     if let Some(tx) = self.active_transaction.take() {
                                         match self.tx_manager.commit_transaction(tx) {
                                             Ok(results) => {
                                                 self.print_results(&results);
-                                                println!("Transaction committed.");
+                                                println!("{}", "Transaction committed.".green());
                                             }
-                                            Err(e) => println!("Error: {}", e),
+                                            Err(e) => println!("{}: {}", "Error".red().bold(), e),
                                         }
                                     } else {
-                                        println!("Error: No active transaction");
+                                        println!("{}", "Error: No active transaction".red());
                                     }
                                 }
                                 Query::Rollback => {
                                     if let Some(tx) = self.active_transaction.take() {
                                         self.tx_manager.rollback_transaction(tx)?;
-                                        println!("Transaction rolled back.");
+                                        println!("{}", "Transaction rolled back.".green());
                                     } else {
-                                        println!("Error: No active transaction");
+                                        println!("{}", "Error: No active transaction".red());
                                     }
                                 }
                                 _ => {
@@ -108,25 +109,25 @@ impl Repl {
                                             Ok(results) => {
                                                 self.print_results(&results);
                                             }
-                                            Err(e) => println!("Error: {}", e),
+                                            Err(e) => println!("{}: {}", "Error".red().bold(), e),
                                         }
                                     }
                                 }
                             }
                         }
-                        Err(e) => println!("Error: {}", e),
+                        Err(e) => println!("{}: {}", "Error".red().bold(), e),
                     }
                 },
                 Err(ReadlineError::Interrupted) => {
-                    println!("CTRL-C");
+                    println!("{}", "CTRL-C".yellow());
                     break
                 },
                 Err(ReadlineError::Eof) => {
-                    println!("CTRL-D");
+                    println!("{}", "CTRL-D".yellow());
                     break
                 },
                 Err(err) => {
-                    println!("Error: {:?}", err);
+                    println!("{}: {:?}", "Error".red().bold(), err);
                     break
                 }
             }
@@ -157,24 +158,25 @@ impl Repl {
 
     fn print_help(&self) {
         let mut table = Table::new();
-        table.set_format(*format::consts::FORMAT_BOX_CHARS);
+        table.set_format(*format::consts::FORMAT_CLEAN);
         
-        table.add_row(row![bFg => "Command", "Description"]);
-        table.add_row(row!["START TRANSACTION", "Begin a new transaction"]);
-        table.add_row(row!["COMMIT", "Commit the active transaction"]);
-        table.add_row(row!["ROLLBACK", "Rollback the active transaction"]);
-        table.add_row(row!["EXIT", "Exit the REPL"]);
-        table.add_row(row!["HELP", "Show this help message"]);
+        // Colored header
+        table.add_row(row![bFg => "Command".cyan().bold(), "Description".cyan().bold()]);
+        table.add_row(row!["START TRANSACTION".green(), "Begin a new transaction"]);
+        table.add_row(row!["COMMIT".green(), "Commit the active transaction"]);
+        table.add_row(row!["ROLLBACK".green(), "Rollback the active transaction"]);
+        table.add_row(row!["EXIT".yellow(), "Exit the REPL"]);
+        table.add_row(row!["HELP".yellow(), "Show this help message"]);
         table.add_row(row!["", ""]);
-        table.add_row(row![bFg => "SQL Commands"]);
-        table.add_row(row!["SELECT ...", "Query data"]);
-        table.add_row(row!["INSERT ...", "Insert data"]);
-        table.add_row(row!["UPDATE ...", "Update data"]);
-        table.add_row(row!["DELETE ...", "Delete data"]);
-        table.add_row(row!["CREATE TABLE ...", "Create a new table"]);
-        table.add_row(row!["MAKE INDEX ON table (column)", "Create an index on a column"]);
-        table.add_row(row!["DROP INDEX column ON table", "Drop an index from a column"]);
-        
+        table.add_row(row![bFg => "SQL Commands".cyan().bold(), "".cyan().bold()]);
+        table.add_row(row!["SELECT ...".green(), "Query data"]);
+        table.add_row(row!["INSERT ...".green(), "Insert data"]);
+        table.add_row(row!["UPDATE ...".green(), "Update data"]);
+        table.add_row(row!["DELETE ...".green(), "Delete data"]);
+        table.add_row(row!["CREATE TABLE ...".green(), "Create a new table"]);
+        table.add_row(row!["MAKE INDEX ON table (column)".green(), "Create an index on a column"]);
+        table.add_row(row!["UNMAKE INDEX column ON table".green(), "Drop an index from a column"]);
+
         table.printstd();
     }
 }

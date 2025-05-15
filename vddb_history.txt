@@ -1,13 +1,4 @@
 #V2
-INSERT INTO Departments VALUES (20, "Sales")
-INSERT INTO Departments VALUES (30, "Marketing")
-SELECT * FROM Employees
-SELECT Name, Salary FROM Employees
-SELECT * FROM Departments
-SELECT Name, Salary FROM Employees WHERE ID = 2
-SELECT Name FROM Employees WHERE Salary > 1200.0
-SELECT Name FROM Employees WHERE DeptID = 10
-SELECT Employees.Name, Departments.DeptName FROM Employees JOIN Departments ON Employees.DeptID = Departments.DeptID
 SELECT SUM(Salary) FROM Employees
 SELECT COUNT FROM Employees
 SELECT AVG(Salary) FROM Employees
@@ -99,3 +90,12 @@ DELETE FROM Employees
 SELECT * FROM Employees
 DROP TABLE Employees
 DROP TABLE Departments
+SELECT * FROM Employees
+SELECT Employees.Name, Departments.DeptName FROM Employees JOIN Departments ON Employees.DeptID = Departments.DeptID
+UNMAKE INDEX Salary ON Employees
+INSERT INTO Employees VALUES (10, "Jack", 1300.0, 10)
+SELECT * FROM Employees
+INSERT INTO Employees VALUES (10, "Jack", 1300.0, 10)
+SELECT * FROM Employees
+INSERT INTO Employees VALUES (10, "Jack", 1300.0, 10)
+SELECT * FROM Employees
