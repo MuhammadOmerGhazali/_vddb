@@ -172,6 +172,8 @@ impl Repl {
         table.add_row(row!["UPDATE ...", "Update data"]);
         table.add_row(row!["DELETE ...", "Delete data"]);
         table.add_row(row!["CREATE TABLE ...", "Create a new table"]);
+        table.add_row(row!["MAKE INDEX ON table (column)", "Create an index on a column"]);
+        table.add_row(row!["DROP INDEX column ON table", "Drop an index from a column"]);
         
         table.printstd();
     }

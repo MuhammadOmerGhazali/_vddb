@@ -1,5 +1,6 @@
 use crate::query::{Aggregation, Condition, Query};
 use crate::schema::Table;
+use crate::storage::index::Index;
 use crate::storage::StorageManager;
 use crate::types::{DbError, Value};
 use crate::DataType;
@@ -82,6 +83,57 @@ impl QueryEngine {
                 Ok(vec![])
             }
             Query::StartTransaction | Query::Commit | Query::Rollback => {
+                Ok(vec![])
+            }
+            Query::MakeIndex { table, column } => {
+                let mut storage_guard = self.storage.lock().unwrap();
+                let table_def = storage_guard
+                    .schema()
+                    .get_table(&table)
+                    .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?
+                    .clone();
+                
+                let col_def = table_def
+                    .get_column(&column)
+                    .ok_or_else(|| DbError::InvalidData(format!("Column {}.{} not found", table, column)))?;
+                
+                let index_path = format!("{}/indexes/{}_{}.idx", storage_guard.data_dir(), table, column);
+                let mut index = Index::new(&index_path, col_def.data_type.clone())?;
+                
+                // Populate the index with existing data
+                let values = storage_guard.read_column(&table, &column, None)?;
+                if !values.is_empty() {
+                    index.append(&values, 0)?;
+                }
+                
+                storage_guard
+                    .indexes
+                    .get_mut(&table)
+                    .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?
+                    .insert(column.clone(), index);
+                
+                Ok(vec![])
+            }
+            Query::DropIndex { table, column } => {
+                let mut storage_guard = self.storage.lock().unwrap();
+                let table_indexes = storage_guard
+                    .indexes
+                    .get_mut(&table)
+                    .ok_or_else(|| DbError::InvalidData(format!("Table {} not found", table)))?;
+                
+                let mut index = table_indexes
+                    .remove(&column)
+                    .ok_or_else(|| DbError::InvalidData(format!("Index on column {}.{} not found", table, column)))?;
+                
+                // Clear the index file
+                index.clear()?;
+                
+                // Remove the index file
+                let index_path = format!("{}/indexes/{}_{}.idx", storage_guard.data_dir(), table, column);
+                if std::path::Path::new(&index_path).exists() {
+                    std::fs::remove_file(&index_path)?;
+                }
+                
                 Ok(vec![])
             }
         }

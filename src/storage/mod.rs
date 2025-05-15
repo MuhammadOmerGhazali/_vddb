@@ -70,7 +70,7 @@ impl StorageManager {
                     col.name.clone(),
                     ColumnStore::new(col, data_dir)?,
                 );
-                if col.name == "ID" || col.name == "Name" {
+                if col.name == "ID"{
                     let index_path = format!("{}/indexes/{}_{}.idx", data_dir, table.name, col.name);
                     table_indexes.insert(
                         col.name.clone(),

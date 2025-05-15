@@ -18,6 +18,8 @@ pub fn parse_query(input: &str) -> Result<Query, DbError> {
         "START" => parse_start_transaction(input),
         "COMMIT" => parse_commit(input),
         "ROLLBACK" => parse_rollback(input),
+        "UNMAKE" => parse_drop_index(input),
+        "MAKE" => parse_make_index(input),
         _ => Err(DbError::QueryError(format!("Unknown command: {}", parts[0]))),
     }
 }
@@ -251,6 +253,26 @@ fn parse_rollback(input: &str) -> Result<Query, DbError> {
     } else {
         Err(DbError::QueryError("Invalid ROLLBACK syntax".to_string()))
     }
+}
+
+fn parse_make_index(input: &str) -> Result<Query, DbError> {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 5 || parts[0].to_uppercase() != "MAKE" || parts[1].to_uppercase() != "INDEX" || parts[2].to_uppercase() != "ON" {
+        return Err(DbError::QueryError("Invalid MAKE INDEX syntax. Expected: MAKE INDEX ON table_name (column_name)".to_string()));
+    }
+    let table = parts[3].to_string();
+    let column = parts[4].trim_matches(|c| c == '(' || c == ')').to_string();
+    Ok(Query::MakeIndex { table, column })
+}
+
+fn parse_drop_index(input: &str) -> Result<Query, DbError> {
+    let parts = input.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 5 || parts[0].to_uppercase() != "UNMAKE" || parts[1].to_uppercase() != "INDEX" || parts[3].to_uppercase() != "ON" {
+        return Err(DbError::QueryError("Invalid DROP INDEX syntax. Expected: DROP INDEX column_name ON table_name".to_string()));
+    }
+    let table = parts[4].to_string();
+    let column = parts[2].to_string();
+    Ok(Query::DropIndex { table, column })
 }
 
 fn parse_condition(input: &str) -> Result<Condition, DbError> {

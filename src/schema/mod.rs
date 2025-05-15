@@ -1,8 +1,9 @@
 use crate::types::{DataType, DbError, Value};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use fs2::FileExt;
+use std::path::Path;
 
 pub mod metadata;
 
@@ -27,23 +28,34 @@ pub struct Schema {
 
 impl Schema {
     pub fn new_schema(data_dir: &str) -> Result<Self, DbError> {
-        fs::create_dir_all(data_dir)?;
-        Ok(Schema {
-            tables: HashMap::new(),
-            data_dir: data_dir.to_string(),
-        })
+        if Path::new(data_dir).exists() {
+            Self::load(data_dir)
+        } else {
+            fs::create_dir_all(data_dir)?;
+            Ok(Schema {
+                tables: HashMap::new(),
+                data_dir: data_dir.to_string(),
+            })
+        }
     }
 
     pub fn add_table(&mut self, name: &str, columns: Vec<Column>) -> Result<(), DbError> {
         if self.tables.contains_key(name) {
-            return Err(DbError::InvalidData(format!("Table {} already exists", name)));
+            return Err(DbError::InvalidData(format!(
+                "Table {} already exists",
+                name
+            )));
         }
         if columns.is_empty() {
-            return Err(DbError::InvalidData("Table must have at least one column".to_string()));
+            return Err(DbError::InvalidData(
+                "Table must have at least one column".to_string(),
+            ));
         }
         for col in &columns {
             if col.name.is_empty() {
-                return Err(DbError::InvalidData("Column name cannot be empty".to_string()));
+                return Err(DbError::InvalidData(
+                    "Column name cannot be empty".to_string(),
+                ));
             }
         }
         self.tables.insert(
@@ -108,8 +120,8 @@ impl Schema {
             return Self::new_schema(data_dir);
         }
         let json = fs::read_to_string(&path)?;
-        let tables: HashMap<String, Table> = serde_json::from_str(&json)
-            .map_err(|e| DbError::SerializationError(e.to_string()))?;
+        let tables: HashMap<String, Table> =
+            serde_json::from_str(&json).map_err(|e| DbError::SerializationError(e.to_string()))?;
         Ok(Schema {
             tables,
             data_dir: data_dir.to_string(),

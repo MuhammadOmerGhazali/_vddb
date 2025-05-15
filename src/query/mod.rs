@@ -60,6 +60,14 @@ pub enum Query {
     DropTable {
         table: String,
     },
+    MakeIndex {
+        table: String,
+        column: String,
+    },
+    DropIndex {
+        table: String,
+        column: String,
+    },
     StartTransaction,
     Commit,
     Rollback,
